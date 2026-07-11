@@ -5,7 +5,7 @@ import os
 import urllib.parse
 import sys
 
-PORT = 8000
+PORT = int(os.environ.get('PORT', 8000))
 DB_FILE = 'database.db'
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
