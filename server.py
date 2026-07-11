@@ -1,19 +1,53 @@
 import http.server
 import socketserver
 import json
-import sqlite3
 import os
 import urllib.parse
 import sys
 
 PORT = 8000
 DB_FILE = 'database.db'
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+def get_connection():
+    if DATABASE_URL:
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        import sqlite3
+        return sqlite3.connect(DB_FILE)
+
+def run_query(query, params=None, fetch=False, fetch_one=False):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Translate SQLite ? placeholders to PostgreSQL %s placeholders if using PostgreSQL
+    if DATABASE_URL:
+        query = query.replace('?', '%s')
+        
+    try:
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+            
+        if fetch:
+            res = cursor.fetchall()
+        elif fetch_one:
+            res = cursor.fetchone()
+        else:
+            conn.commit()
+            res = True
+        return res
+    except Exception as e:
+        print(f"Database Query Error on [{query}]: {e}")
+        raise e
+    finally:
+        conn.close()
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
     # Create venues table
-    cursor.execute('''
+    run_query('''
         CREATE TABLE IF NOT EXISTS venues (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -26,8 +60,9 @@ def init_db():
             icon TEXT NOT NULL
         )
     ''')
+    
     # Create bookings table
-    cursor.execute('''
+    run_query('''
         CREATE TABLE IF NOT EXISTS bookings (
             id TEXT PRIMARY KEY,
             venueId TEXT NOT NULL,
@@ -45,11 +80,10 @@ def init_db():
             checkedIn INTEGER NOT NULL
         )
     ''')
-    conn.commit()
 
     # Seed default venues if empty
-    cursor.execute("SELECT COUNT(*) FROM venues")
-    if cursor.fetchone()[0] == 0:
+    count_venues = run_query("SELECT COUNT(*) FROM venues", fetch_one=True)[0]
+    if count_venues == 0:
         default_venues = [
             ("auditorium", "Main Auditorium", 500, "Large", "estate", "The primary venue for major cultural events, guest lectures, and university assemblies.", "projector,ac,mic", "Stage Projector,Central AC,Professional Audio System,Tiered Theater Seating", '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16v2H4zm16-4V5c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0-2-.9-2-2zM9 9l6 3-6 3V9z"/></svg>'),
             ("seminar-1", "Seminar Hall - 1", 120, "Medium", "dept", "Modern lecture and presentations hall, ideal for academic symposiums and club workshops.", "projector,ac,mic", "4K Projector,Split AC,Podium Microphone,Dual Smart-Boards", '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm14 14v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'),
@@ -60,12 +94,12 @@ def init_db():
             ("cr-101", "Departmental Classroom 101", 60, "Medium", "dept", "Equipped lecture room primarily used for non-teaching club actions outside regular class schedules.", "projector,ac", "Projector Screen,High wall ACs,Standard Seating", '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><path d="M9 17v-2a3 3 0 0 1 6 0v2"/></svg>'),
             ("cr-102", "Departmental Classroom 102", 60, "Medium", "dept", "Equipped lecture room primarily used for non-teaching departmental workshops or tutorials.", "projector,ac", "Projector Screen,High wall ACs,Standard Seating", '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><path d="M9 17v-2a3 3 0 0 1 6 0v2"/></svg>')
         ]
-        cursor.executemany("INSERT INTO venues VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", default_venues)
-        conn.commit()
+        for v in default_venues:
+            run_query("INSERT INTO venues VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", v)
 
     # Seed default bookings if empty
-    cursor.execute("SELECT COUNT(*) FROM bookings")
-    if cursor.fetchone()[0] == 0:
+    count_bookings = run_query("SELECT COUNT(*) FROM bookings", fetch_one=True)[0]
+    if count_bookings == 0:
         import datetime
         today_str = datetime.date.today().isoformat()
         tomorrow_str = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
@@ -76,10 +110,8 @@ def init_db():
             ("B-102", "seminar-1", tomorrow_str, "10:00", "12:00", "Amit Patel (Club Rep)", "Student Representative", "Coding Club Hackathon Orientation", 90, "pending", "", 0, None, 0),
             ("B-103", "conference", yesterday_str, "09:00", "11:00", "Dr. Rajesh Sharma", "Faculty Member", "Academic Council Board Review", 20, "rejected", "Room booked for external NAAC delegation team inspections.", 0, None, 0)
         ]
-        cursor.executemany("INSERT INTO bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", default_bookings)
-        conn.commit()
-
-    conn.close()
+        for b in default_bookings:
+            run_query("INSERT INTO bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", b)
 
 class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
 
@@ -104,59 +136,56 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
         path = url_parsed.path
 
         if path == '/api/venues':
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM venues")
-            rows = cursor.fetchall()
-            conn.close()
-            venues = []
-            for r in rows:
-                venues.append({
-                    "id": r[0],
-                    "name": r[1],
-                    "capacity": r[2],
-                    "type": r[3],
-                    "approver": r[4],
-                    "description": r[5],
-                    "facilities": [f.strip() for f in r[6].split(',')] if r[6] else [],
-                    "facilitiesLabels": [f.strip() for f in r[7].split(',')] if r[7] else [],
-                    "icon": r[8]
-                })
-            self.send_json(venues)
+            try:
+                rows = run_query("SELECT * FROM venues", fetch=True)
+                venues = []
+                for r in rows:
+                    venues.append({
+                        "id": r[0],
+                        "name": r[1],
+                        "capacity": r[2],
+                        "type": r[3],
+                        "approver": r[4],
+                        "description": r[5],
+                        "facilities": [f.strip() for f in r[6].split(',')] if r[6] else [],
+                        "facilitiesLabels": [f.strip() for f in r[7].split(',')] if r[7] else [],
+                        "icon": r[8]
+                    })
+                self.send_json(venues)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
             return
 
         elif path == '/api/bookings':
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM bookings")
-            rows = cursor.fetchall()
-            conn.close()
-            bookings = []
-            for r in rows:
-                bookings.append({
-                    "id": r[0],
-                    "venueId": r[1],
-                    "date": r[2],
-                    "startTime": r[3],
-                    "endTime": r[4],
-                    "requesterName": r[5],
-                    "requesterRole": r[6],
-                    "purpose": r[7],
-                    "expectedAttendees": r[8],
-                    "status": r[9],
-                    "approverComments": r[10] or "",
-                    "isRecurring": bool(r[11]),
-                    "recurrenceParent": r[12],
-                    "checkedIn": bool(r[13])
-                })
-            self.send_json(bookings)
+            try:
+                rows = run_query("SELECT * FROM bookings", fetch=True)
+                bookings = []
+                for r in rows:
+                    bookings.append({
+                        "id": r[0],
+                        "venueId": r[1],
+                        "date": r[2],
+                        "startTime": r[3],
+                        "endTime": r[4],
+                        "requesterName": r[5],
+                        "requesterRole": r[6],
+                        "purpose": r[7],
+                        "expectedAttendees": r[8],
+                        "status": r[9],
+                        "approverComments": r[10] or "",
+                        "isRecurring": bool(r[11]),
+                        "recurrenceParent": r[12],
+                        "checkedIn": bool(r[13])
+                    })
+                self.send_json(bookings)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
             return
 
         # Serve static files
         if path == '/' or path == '':
             path = '/index.html'
 
-        # Build absolute path to verify it sits under workspace
         filename = path.lstrip('/')
         filepath = os.path.join(os.getcwd(), filename)
 
@@ -197,12 +226,10 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if path == '/api/venues':
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
             try:
                 facilities = ",".join(body.get("facilities", []))
                 facilitiesLabels = ",".join(body.get("facilitiesLabels", []))
-                cursor.execute(
+                run_query(
                     "INSERT INTO venues VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         body["id"],
@@ -216,22 +243,16 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                         body["icon"]
                     )
                 )
-                conn.commit()
                 self.send_json({"success": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-            finally:
-                conn.close()
             return
 
         elif path == '/api/bookings':
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
             try:
-                # Can be a single booking dict or a list of booking dicts (for recurring bookings)
                 if isinstance(body, list):
                     for b in body:
-                        cursor.execute(
+                        run_query(
                             "INSERT INTO bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 b["id"],
@@ -252,7 +273,7 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                         )
                 else:
                     b = body
-                    cursor.execute(
+                    run_query(
                         "INSERT INTO bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             b["id"],
@@ -271,12 +292,9 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                             1 if b["checkedIn"] else 0
                         )
                     )
-                conn.commit()
                 self.send_json({"success": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-            finally:
-                conn.close()
             return
 
         self.send_response(404)
@@ -286,7 +304,6 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
         url_parsed = urllib.parse.urlparse(self.path)
         path = url_parsed.path
         
-        # Expect path to be /api/bookings/<id> or /api/bookings (batch update)
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length).decode('utf-8')
         
@@ -297,14 +314,11 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if path.startswith('/api/bookings'):
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
             try:
-                # If path contains an ID, update specific booking
                 parts = path.rstrip('/').split('/')
                 if len(parts) > 3:
                     booking_id = parts[3]
-                    cursor.execute(
+                    run_query(
                         "UPDATE bookings SET venueId=?, date=?, startTime=?, endTime=?, requesterName=?, requesterRole=?, purpose=?, expectedAttendees=?, status=?, approverComments=?, isRecurring=?, recurrenceParent=?, checkedIn=? WHERE id=?",
                         (
                             body["venueId"],
@@ -324,11 +338,9 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                         )
                     )
                 else:
-                    # Batch save/sync (if frontend does a full bookings rewrite)
-                    # We truncate and re-insert
-                    cursor.execute("DELETE FROM bookings")
+                    run_query("DELETE FROM bookings")
                     for b in body:
-                        cursor.execute(
+                        run_query(
                             "INSERT INTO bookings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 b["id"],
@@ -347,12 +359,9 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                                 1 if b["checkedIn"] else 0
                             )
                         )
-                conn.commit()
                 self.send_json({"success": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-            finally:
-                conn.close()
             return
             
         self.send_response(404)
@@ -364,30 +373,27 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
 
         if path.startswith('/api/venues/'):
             venue_id = path.split('/')[-1]
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
             try:
-                # Delete venue
-                cursor.execute("DELETE FROM venues WHERE id=?", (venue_id,))
-                
-                # Delete/Cancel bookings associated with this venue
-                cursor.execute(
+                run_query("DELETE FROM venues WHERE id=?", (venue_id,))
+                run_query(
                     "UPDATE bookings SET status='cancelled', approverComments='Cancelled because the venue was deleted by the administrator.' WHERE venueId=? AND status != 'cancelled' AND status != 'rejected'", 
                     (venue_id,)
                 )
-                conn.commit()
                 self.send_json({"success": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-            finally:
-                conn.close()
             return
 
         self.send_response(404)
         self.end_headers()
 
 if __name__ == '__main__':
-    init_db()
+    # Initialize the database on startup (either SQLite locally or PostgreSQL in production)
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Failed to initialize database: {e}")
+        
     handler = VenueHubHTTPHandler
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", PORT), handler) as httpd:
