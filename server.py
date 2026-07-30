@@ -4,8 +4,100 @@ import json
 import os
 import urllib.parse
 import sys
+import threading
+from dotenv import load_dotenv
+
+load_dotenv()
+
+try:
+    import resend
+    resend.api_key = os.environ.get("RESEND_API_KEY")
+except ImportError:
+    resend = None
+
+ADMIN_EMAIL = "aryan777rana@gmail.com"
+SENDER_EMAIL = "admin@manik2375.tech"
+
+def send_email_async(to_email, subject, html_content):
+    if not resend or not resend.api_key:
+        print(f"[Email Disabled] To: {to_email} | Subject: {subject}")
+        return
+    
+    def _send():
+        try:
+            params = {
+                "from": SENDER_EMAIL,
+                "to": [to_email],
+                "subject": subject,
+                "html": html_content
+            }
+            resend.Emails.send(params)
+            print(f"[Email Sent] To: {to_email} | Subject: {subject}")
+        except Exception as e:
+            print(f"[Email Error] Failed to send email to {to_email}: {e}")
+            
+    threading.Thread(target=_send).start()
+
+def handle_booking_notifications(old_bookings_list, new_bookings_list):
+    old_map = {b[0]: b for b in old_bookings_list}
+    
+    for nb in new_bookings_list:
+        b_id = nb.get("id")
+        b_email = nb.get("requesterName")
+        b_status = nb.get("status")
+        b_purpose = nb.get("purpose")
+        b_date = nb.get("date")
+        b_time = f"{nb.get('startTime')} - {nb.get('endTime')}"
+        
+        if b_id not in old_map:
+            # New Booking
+            subject_user = f"Booking Requested: {b_purpose}"
+            html_user = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been requested and is pending approval.</p>"
+            send_email_async(b_email, subject_user, html_user)
+            
+            subject_admin = f"New Booking Request: {b_purpose}"
+            html_admin = f"<p>A new booking request from {b_email} for <b>{b_purpose}</b> on {b_date} ({b_time}) requires approval.</p>"
+            send_email_async(ADMIN_EMAIL, subject_admin, html_admin)
+        else:
+            ob = old_map[b_id]
+            o_status = ob[9]
+            
+            if o_status != b_status:
+                if b_status == "approved":
+                    subject = f"Booking Confirmed: {b_purpose}"
+                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>confirmed</b>.</p>"
+                    send_email_async(b_email, subject, html)
+                elif b_status == "rejected":
+                    subject = f"Booking Rejected: {b_purpose}"
+                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>rejected</b>.</p>"
+                    send_email_async(b_email, subject, html)
+                elif b_status == "cancelled":
+                    subject = f"Booking Cancelled: {b_purpose}"
+                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>cancelled</b>.</p>"
+                    send_email_async(b_email, subject, html)
+            else:
+                o_date = ob[2]
+                o_startTime = ob[3]
+                o_endTime = ob[4]
+                o_venueId = ob[1]
+                
+                if o_date != b_date or o_startTime != nb.get("startTime") or o_endTime != nb.get("endTime") or o_venueId != nb.get("venueId"):
+                    subject = f"Booking Updated: {b_purpose}"
+                    html = f"<p>Your booking for <b>{b_purpose}</b> has been updated. New time: {b_date} ({b_time}).</p>"
+                    send_email_async(b_email, subject, html)
+
+    # Detect deleted/cancelled bookings that were completely removed from the payload
+    new_map = {nb.get("id"): nb for nb in new_bookings_list}
+    for ob in old_bookings_list:
+        if ob[0] not in new_map:
+            # It was removed
+            if ob[9] != "cancelled" and ob[9] != "rejected":
+                subject = f"Booking Cancelled: {ob[7]}"
+                html = f"<p>Your booking for <b>{ob[7]}</b> on {ob[2]} has been <b>cancelled</b>.</p>"
+                send_email_async(ob[5], subject, html)
 
 PORT = int(os.environ.get('PORT', 8000))
+
 DB_FILE = 'database.db'
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
@@ -250,6 +342,10 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == '/api/bookings':
             try:
+                old_bookings = run_query("SELECT * FROM bookings", fetch=True)
+                new_bookings = body if isinstance(body, list) else [body]
+                handle_booking_notifications(old_bookings, new_bookings)
+
                 if isinstance(body, list):
                     for b in body:
                         run_query(
@@ -318,6 +414,8 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                 parts = path.rstrip('/').split('/')
                 if len(parts) > 3:
                     booking_id = parts[3]
+                    old_bookings = run_query("SELECT * FROM bookings WHERE id=?", (booking_id,), fetch=True)
+                    handle_booking_notifications(old_bookings, [body])
                     run_query(
                         "UPDATE bookings SET venueId=?, date=?, startTime=?, endTime=?, requesterName=?, requesterRole=?, purpose=?, expectedAttendees=?, status=?, approverComments=?, isRecurring=?, recurrenceParent=?, checkedIn=? WHERE id=?",
                         (
@@ -338,6 +436,8 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                         )
                     )
                 else:
+                    old_bookings = run_query("SELECT * FROM bookings", fetch=True)
+                    handle_booking_notifications(old_bookings, body)
                     run_query("DELETE FROM bookings")
                     for b in body:
                         run_query(
@@ -374,6 +474,13 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith('/api/venues/'):
             venue_id = path.split('/')[-1]
             try:
+                # Find all affected bookings before cancelling
+                affected_bookings = run_query("SELECT * FROM bookings WHERE venueId=? AND status != 'cancelled' AND status != 'rejected'", (venue_id,), fetch=True)
+                for ob in affected_bookings:
+                    subject = f"Booking Cancelled: {ob[7]}"
+                    html = f"<p>Your booking for <b>{ob[7]}</b> on {ob[2]} has been <b>cancelled</b> because the venue was deleted by the administrator.</p>"
+                    send_email_async(ob[5], subject, html)
+
                 run_query("DELETE FROM venues WHERE id=?", (venue_id,))
                 run_query(
                     "UPDATE bookings SET status='cancelled', approverComments='Cancelled because the venue was deleted by the administrator.' WHERE venueId=? AND status != 'cancelled' AND status != 'rejected'", 
