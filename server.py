@@ -38,6 +38,126 @@ def send_email_async(to_email, subject, html_content):
             
     threading.Thread(target=_send).start()
 
+def get_venue_name(venue_id):
+    # run_query is defined further down, but it's available in global scope at runtime.
+    res = run_query("SELECT name FROM venues WHERE id=?", (venue_id,), fetch_one=True)
+    return res[0] if res else "Unknown Venue"
+
+def build_email_html(title, message, purpose, venue_name, date, time, attendees):
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background-color: #f4f7f6;
+                color: #333333;
+                margin: 0;
+                padding: 0;
+            }}
+            .container {{
+                max-width: 600px;
+                margin: 40px auto;
+                background: #ffffff;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            }}
+            .header {{
+                background-color: #2563eb;
+                color: #ffffff;
+                padding: 30px 40px;
+                text-align: center;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 24px;
+                font-weight: 600;
+            }}
+            .content {{
+                padding: 40px;
+            }}
+            .message {{
+                font-size: 16px;
+                line-height: 1.6;
+                margin-bottom: 30px;
+            }}
+            .details-card {{
+                background-color: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                padding: 20px;
+                margin-bottom: 20px;
+            }}
+            .detail-row {{
+                margin-bottom: 12px;
+                font-size: 15px;
+            }}
+            .detail-row:last-child {{
+                margin-bottom: 0;
+            }}
+            .detail-label {{
+                font-weight: 600;
+                color: #64748b;
+                display: inline-block;
+                width: 120px;
+            }}
+            .detail-value {{
+                color: #0f172a;
+                font-weight: 500;
+            }}
+            .footer {{
+                background-color: #f8fafc;
+                padding: 20px;
+                text-align: center;
+                font-size: 13px;
+                color: #94a3b8;
+                border-top: 1px solid #e2e8f0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>{title}</h1>
+            </div>
+            <div class="content">
+                <div class="message">
+                    {message}
+                </div>
+                <div class="details-card">
+                    <div class="detail-row">
+                        <span class="detail-label">Purpose:</span>
+                        <span class="detail-value">{purpose}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Room / Venue:</span>
+                        <span class="detail-value">{venue_name}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Date:</span>
+                        <span class="detail-value">{date}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Time:</span>
+                        <span class="detail-value">{time}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Attendees:</span>
+                        <span class="detail-value">{attendees}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="footer">
+                This is an automated notification from the University Venue Booking System.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
 def handle_booking_notifications(old_bookings_list, new_bookings_list):
     old_map = {b[0]: b for b in old_bookings_list}
     
@@ -48,15 +168,20 @@ def handle_booking_notifications(old_bookings_list, new_bookings_list):
         b_purpose = nb.get("purpose")
         b_date = nb.get("date")
         b_time = f"{nb.get('startTime')} - {nb.get('endTime')}"
+        b_attendees = nb.get("expectedAttendees", "N/A")
+        
+        venue_name = get_venue_name(nb.get("venueId"))
         
         if b_id not in old_map:
             # New Booking
             subject_user = f"Booking Requested: {b_purpose}"
-            html_user = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been requested and is pending approval.</p>"
+            msg_user = f"Your booking request has been submitted and is pending approval."
+            html_user = build_email_html(subject_user, msg_user, b_purpose, venue_name, b_date, b_time, b_attendees)
             send_email_async(b_email, subject_user, html_user)
             
             subject_admin = f"New Booking Request: {b_purpose}"
-            html_admin = f"<p>A new booking request from {b_email} for <b>{b_purpose}</b> on {b_date} ({b_time}) requires approval.</p>"
+            msg_admin = f"A new booking request from {b_email} requires approval."
+            html_admin = build_email_html(subject_admin, msg_admin, b_purpose, venue_name, b_date, b_time, b_attendees)
             send_email_async(ADMIN_EMAIL, subject_admin, html_admin)
         else:
             ob = old_map[b_id]
@@ -65,15 +190,18 @@ def handle_booking_notifications(old_bookings_list, new_bookings_list):
             if o_status != b_status:
                 if b_status == "approved":
                     subject = f"Booking Confirmed: {b_purpose}"
-                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>confirmed</b>.</p>"
+                    msg = f"Good news! Your booking has been confirmed."
+                    html = build_email_html(subject, msg, b_purpose, venue_name, b_date, b_time, b_attendees)
                     send_email_async(b_email, subject, html)
                 elif b_status == "rejected":
                     subject = f"Booking Rejected: {b_purpose}"
-                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>rejected</b>.</p>"
+                    msg = f"Unfortunately, your booking request has been rejected."
+                    html = build_email_html(subject, msg, b_purpose, venue_name, b_date, b_time, b_attendees)
                     send_email_async(b_email, subject, html)
                 elif b_status == "cancelled":
                     subject = f"Booking Cancelled: {b_purpose}"
-                    html = f"<p>Your booking for <b>{b_purpose}</b> on {b_date} ({b_time}) has been <b>cancelled</b>.</p>"
+                    msg = f"Your booking has been cancelled."
+                    html = build_email_html(subject, msg, b_purpose, venue_name, b_date, b_time, b_attendees)
                     send_email_async(b_email, subject, html)
             else:
                 o_date = ob[2]
@@ -83,7 +211,8 @@ def handle_booking_notifications(old_bookings_list, new_bookings_list):
                 
                 if o_date != b_date or o_startTime != nb.get("startTime") or o_endTime != nb.get("endTime") or o_venueId != nb.get("venueId"):
                     subject = f"Booking Updated: {b_purpose}"
-                    html = f"<p>Your booking for <b>{b_purpose}</b> has been updated. New time: {b_date} ({b_time}).</p>"
+                    msg = f"Your booking details have been updated."
+                    html = build_email_html(subject, msg, b_purpose, venue_name, b_date, b_time, b_attendees)
                     send_email_async(b_email, subject, html)
 
     # Detect deleted/cancelled bookings that were completely removed from the payload
@@ -92,8 +221,14 @@ def handle_booking_notifications(old_bookings_list, new_bookings_list):
         if ob[0] not in new_map:
             # It was removed
             if ob[9] != "cancelled" and ob[9] != "rejected":
-                subject = f"Booking Cancelled: {ob[7]}"
-                html = f"<p>Your booking for <b>{ob[7]}</b> on {ob[2]} has been <b>cancelled</b>.</p>"
+                o_purpose = ob[7]
+                o_date = ob[2]
+                o_time = f"{ob[3]} - {ob[4]}"
+                o_venue_name = get_venue_name(ob[1])
+                o_attendees = ob[8]
+                subject = f"Booking Cancelled: {o_purpose}"
+                msg = f"Your booking has been cancelled (likely due to the venue being deleted or schedule clearing)."
+                html = build_email_html(subject, msg, o_purpose, o_venue_name, o_date, o_time, o_attendees)
                 send_email_async(ob[5], subject, html)
 
 PORT = int(os.environ.get('PORT', 8000))
@@ -477,8 +612,14 @@ class VenueHubHTTPHandler(http.server.BaseHTTPRequestHandler):
                 # Find all affected bookings before cancelling
                 affected_bookings = run_query("SELECT * FROM bookings WHERE venueId=? AND status != 'cancelled' AND status != 'rejected'", (venue_id,), fetch=True)
                 for ob in affected_bookings:
-                    subject = f"Booking Cancelled: {ob[7]}"
-                    html = f"<p>Your booking for <b>{ob[7]}</b> on {ob[2]} has been <b>cancelled</b> because the venue was deleted by the administrator.</p>"
+                    o_purpose = ob[7]
+                    o_date = ob[2]
+                    o_time = f"{ob[3]} - {ob[4]}"
+                    o_venue_name = get_venue_name(ob[1])
+                    o_attendees = ob[8]
+                    subject = f"Booking Cancelled: {o_purpose}"
+                    msg = f"Your booking has been cancelled because the venue was deleted by the administrator."
+                    html = build_email_html(subject, msg, o_purpose, o_venue_name, o_date, o_time, o_attendees)
                     send_email_async(ob[5], subject, html)
 
                 run_query("DELETE FROM venues WHERE id=?", (venue_id,))
