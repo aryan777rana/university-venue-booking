@@ -59,6 +59,10 @@
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                     <span>Admin Dashboard</span>
                 </a>
+                <a href="#sync" class="nav-item admin-only" data-view="sync">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                    <span>Dataset Sync</span>
+                </a>
                 <a href="#checkin" class="nav-item auth-only" data-view="checkin">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="7" y="7" width="3" height="3"></rect><rect x="14" y="7" width="3" height="3"></rect><rect x="7" y="14" width="3" height="3"></rect><rect x="14" y="14" width="3" height="3"></rect></svg>
                     <span>QR Check-In</span>
@@ -343,6 +347,87 @@
                     </div>
                 </section>
 
+                <!-- 5b. DATASET SYNCHRONIZATION VIEW -->
+                <section id="view-sync" class="app-view">
+                    <div class="sync-grid">
+                        <!-- Left Panel: Input Data and Settings -->
+                        <div class="card sync-input-card">
+                            <div class="card-header">
+                                <h3>Data Source Selection</h3>
+                                <p class="card-subtitle">Paste your table from Excel/Google Sheets or load CSV/JSON</p>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group text-align-left">
+                                    <label>Dataset Input Method</label>
+                                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                        <button type="button" class="btn btn-sm btn-primary" id="btn-input-paste">Paste Text</button>
+                                        <button type="button" class="btn btn-sm btn-outline" id="btn-input-file">Upload File</button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Paste Text Field -->
+                                <div id="paste-input-container" class="form-group text-align-left">
+                                    <label for="sync-raw-text">Paste Data Rows (TSV or CSV format)</label>
+                                    <textarea id="sync-raw-text" class="form-input" rows="8" placeholder="Format Example (Tab separated):&#10;Venue&#9;Teacher&#9;Date&#9;Start&#9;End&#9;Purpose&#10;Main Auditorium&#9;Dr. Rajesh Sharma&#9;2026-08-01&#9;14:00&#9;17:00&#9;Guest Lecture"></textarea>
+                                </div>
+
+                                <!-- File Upload Field -->
+                                <div id="file-input-container" class="form-group text-align-left" style="display: none;">
+                                    <label>Choose CSV/TSV or JSON file</label>
+                                    <div class="upload-drop-zone" id="sync-drop-zone">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                                        <span>Click to browse or drag & drop file here</span>
+                                        <input type="file" id="sync-file-input" style="display: none;" accept=".csv,.tsv,.txt,.json">
+                                    </div>
+                                    <div id="sync-file-name" class="text-secondary" style="font-size: 0.8rem; margin-top: 0.5rem; display: none;"></div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group text-align-left">
+                                        <label for="sync-format-select">Format</label>
+                                        <select id="sync-format-select" class="form-input">
+                                            <option value="auto">Auto-detect</option>
+                                            <option value="tsv">Tab-Separated (TSV)</option>
+                                            <option value="csv">Comma-Separated (CSV)</option>
+                                            <option value="json">JSON</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group text-align-left">
+                                        <label for="sync-mode-select">Import Mode</label>
+                                        <select id="sync-mode-select" class="form-input">
+                                            <option value="append">Append (Add to database)</option>
+                                            <option value="overwrite">Overwrite (Reset database)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="form-group checkbox-group text-align-left" id="header-row-container" style="margin-top: 0.5rem;">
+                                    <input type="checkbox" id="sync-has-headers" checked>
+                                    <label for="sync-has-headers">First row contains column headers</label>
+                                </div>
+
+                                <button class="btn btn-primary btn-block" id="btn-parse-data" style="margin-top: 1rem;">
+                                    Parse & Review Data
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Field Mapping and Preview -->
+                        <div class="card sync-preview-card">
+                            <div class="card-header">
+                                <h3>Mapping & Preview</h3>
+                                <p class="card-subtitle">Map columns and verify bookings against timetable & existing schedules</p>
+                            </div>
+                            <div class="card-body" id="sync-preview-body">
+                                <div class="sync-empty-state">
+                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                    <p>Please enter or upload data and click "Parse & Review Data" to map and preview.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- 6. QR CODE CHECKIN SIMULATOR -->
                 <section id="view-checkin" class="app-view">
                     <div class="checkin-container card">
@@ -598,6 +683,6 @@
     </div>
 
     <!-- JS Scripts -->
-    <script src="app.js"></script>
+    <script src="app.js?v=1785348781"></script>
 </body>
 </html>

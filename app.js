@@ -318,7 +318,7 @@ const ROLES = {
     student: { name: "Amit Patel (Club Rep)", displayRole: "Student Representative", avatar: "S", views: ["catalogue", "calendar", "bookings", "checkin"] },
     "approver-dept": { name: "Prof. Veena Verma (HOD)", displayRole: "Department Office", avatar: "D", views: ["catalogue", "calendar", "approvals"] },
     "approver-estate": { name: "Col. Ranbir Singh", displayRole: "Estate Office", avatar: "E", views: ["catalogue", "calendar", "approvals"] },
-    admin: { name: "Administrator Hub", displayRole: "System Admin", avatar: "A", views: ["catalogue", "calendar", "reports"] }
+    admin: { name: "Administrator Hub", displayRole: "System Admin", avatar: "A", views: ["catalogue", "calendar", "reports", "sync"] }
 };
 
 // Working Hours (8:00 AM - 8:00 PM)
@@ -870,6 +870,10 @@ function renderView(viewName) {
         DOM.viewTitle.textContent = "Utilization Dashboard";
         DOM.viewSubtitle.textContent = "Campus administrative charts, utilization rates, and timetable locks configuration.";
         renderAdminDashboard();
+    } else if (viewName === "sync") {
+        DOM.viewTitle.textContent = "Dataset Synchronization";
+        DOM.viewSubtitle.textContent = "Upload or paste spreadsheets containing venues and bookings to sync with the database.";
+        renderSyncView();
     } else if (viewName === "checkin") {
         DOM.viewTitle.textContent = "QR Check-in Scanner";
         DOM.viewSubtitle.textContent = "Scan a mock QR code inside building premises to record venue utilization.";
@@ -1229,7 +1233,14 @@ window.showBookingAlert = function(bookingId) {
 window.showPendingAlert = function(bookingId) {
     const booking = state.bookings.find(b => b.id === bookingId);
     if (booking) {
-        showToast("Slot Awaiting Review", `Request for "${booking.purpose}" by ${booking.requesterName} is pending approval.`, "warning");
+        const isApprover = (state.currentRole === "approver-dept" && getVenueApprover(booking.venueId) === "dept") || 
+                           (state.currentRole === "approver-estate" && getVenueApprover(booking.venueId) === "estate");
+        
+        if (isApprover) {
+            openApprovalModal(bookingId);
+        } else {
+            showToast("Slot Awaiting Review", `Request for "${booking.purpose}" by ${booking.requesterName} is pending approval.`, "warning");
+        }
     }
 };
 
@@ -1964,6 +1975,8 @@ DOM.bookingForm.addEventListener("submit", (e) => {
     }
 
     closeBookingModal();
+
+    closeBookingModal();
     updatePendingBadgeCount();
     
     // Redirect view to bookings list
@@ -1972,39 +1985,52 @@ DOM.bookingForm.addEventListener("submit", (e) => {
 });
 
 // --- APPROVER ACTIONS MODAL WORKFLOW ---
+
 let activeReviewBookingId = null;
 
 window.openApprovalModal = function(bookingId) {
-    const booking = state.bookings.find(b => b.id === bookingId);
-    if (!booking) return;
+    try {
+        const booking = state.bookings.find(b => b.id === bookingId);
+        if (!booking) {
+            showToast("Error", "Booking not found in memory.", "danger");
+            return;
+        }
 
-    activeReviewBookingId = bookingId;
-    
-    DOM.reviewId.textContent = booking.id;
-    DOM.reviewRequester.textContent = booking.requesterName;
-    DOM.reviewRequesterRole.textContent = booking.requesterRole;
-    DOM.reviewVenue.textContent = getVenueName(booking.venueId);
-    DOM.reviewTime.textContent = `${getReadableDate(booking.date)} | ${booking.startTime} - ${booking.endTime}`;
-    DOM.reviewAttendees.textContent = booking.expectedAttendees;
-    DOM.reviewPurpose.textContent = booking.purpose;
-    DOM.reviewRecurrence.textContent = booking.isRecurring ? "Weekly Series" : "One-time Slot";
-    DOM.approvalComment.value = "";
+        activeReviewBookingId = bookingId;
+        
+        DOM.reviewId.textContent = booking.id;
+        DOM.reviewRequester.textContent = booking.requesterName;
+        DOM.reviewRequesterRole.textContent = booking.requesterRole;
+        DOM.reviewVenue.textContent = getVenueName(booking.venueId);
+        DOM.reviewTime.textContent = `${getReadableDate(booking.date)} | ${booking.startTime} - ${booking.endTime}`;
+        DOM.reviewAttendees.textContent = booking.expectedAttendees || "N/A";
+        DOM.reviewPurpose.textContent = booking.purpose || "N/A";
+        DOM.reviewRecurrence.textContent = booking.isRecurring ? "Weekly Series" : "One-time Slot";
+        DOM.approvalComment.value = "";
 
-    // Highlight conflicts
-    const pendingConflicts = checkOverlappingPendingRequestsCount(booking);
-    const hasTimetableConflict = checkAcademicTimetableConflict(booking.venueId, booking.date, booking.startTime, booking.endTime);
+        try {
+            const pendingConflicts = checkOverlappingPendingRequestsCount(booking);
+            const hasTimetableConflict = checkAcademicTimetableConflict(booking.venueId, booking.date, booking.startTime, booking.endTime);
 
-    if (hasTimetableConflict) {
-        DOM.reviewConflictWarning.style.display = "flex";
-        DOM.reviewConflictText.textContent = "Conflict flagged! This slots overlaps with an official academic timetable class block.";
-    } else if (pendingConflicts > 0) {
-        DOM.reviewConflictWarning.style.display = "flex";
-        DOM.reviewConflictText.textContent = `Warning: ${pendingConflicts} other pending requests are competing for the same slot. Confirming this will automatically reject them.`;
-    } else {
-        DOM.reviewConflictWarning.style.display = "none";
+            if (hasTimetableConflict) {
+                DOM.reviewConflictWarning.style.display = "flex";
+                DOM.reviewConflictText.textContent = "Conflict flagged! This slots overlaps with an official academic timetable class block.";
+            } else if (pendingConflicts > 0) {
+                DOM.reviewConflictWarning.style.display = "flex";
+                DOM.reviewConflictText.textContent = `Warning: ${pendingConflicts} other pending requests are competing for the same slot. Confirming this will automatically reject them.`;
+            } else {
+                DOM.reviewConflictWarning.style.display = "none";
+            }
+        } catch (err) {
+            console.error(err);
+            DOM.reviewConflictWarning.style.display = "none";
+        }
+
+        DOM.approvalModal.classList.add("active");
+    } catch (e) {
+        console.error(e);
+        showToast("System Error", "Failed to open approval modal.", "danger");
     }
-
-    DOM.approvalModal.classList.add("active");
 };
 
 function closeApprovalModal() {
@@ -2012,39 +2038,6 @@ function closeApprovalModal() {
     activeReviewBookingId = null;
 }
 DOM.closeApprovalModal.addEventListener("click", closeApprovalModal);
-
-// Approve Action click
-DOM.btnApproveRequest.addEventListener("click", () => {
-    if (!activeReviewBookingId) return;
-    const bIndex = state.bookings.findIndex(b => b.id === activeReviewBookingId);
-    if (bIndex !== -1) {
-        const booking = state.bookings[bIndex];
-        
-        // Final Double Booking check to prevent race conditions
-        const hasApprovedConflict = checkBookingConflicts(booking.venueId, booking.date, booking.startTime, booking.endTime);
-        if (hasApprovedConflict && hasApprovedConflict.type !== "pending") {
-            showToast("Approval Denied", "Cannot approve! Slot was recently confirmed for another event or timetable change.", "danger");
-            closeApprovalModal();
-            return;
-        }
-
-        booking.status = "approved";
-        booking.approverComments = DOM.approvalComment.value || "Approved. Make sure to present your QR code at check-in.";
-        
-        // CONFLICT PREVENTION: Auto reject conflicting pending reservations
-        autoRejectConflictingBookings(booking);
-
-        saveBookings();
-        showToast("Request Approved", `Confirmed booking ${booking.id} reservation successfully.`, "success");
-        
-        // Notify Requester
-        addNotification("Booking Confirmed", `Your booking request ${booking.id} for ${getVenueName(booking.venueId)} has been APPROVED.`);
-
-        closeApprovalModal();
-        updatePendingBadgeCount();
-        renderView("approvals");
-    }
-});
 
 function autoRejectConflictingBookings(confirmedBooking) {
     const startH = parseInt(confirmedBooking.startTime.split(":")[0]);
@@ -2069,32 +2062,82 @@ function autoRejectConflictingBookings(confirmedBooking) {
     });
 }
 
-// Reject Action click
+DOM.btnApproveRequest.addEventListener("click", () => {
+    try {
+        if (!activeReviewBookingId) return;
+        const bIndex = state.bookings.findIndex(b => b.id === activeReviewBookingId);
+        if (bIndex === -1) return;
+        
+        const booking = state.bookings[bIndex];
+        
+        const hasApprovedConflict = checkBookingConflicts(booking.venueId, booking.date, booking.startTime, booking.endTime);
+        if (hasApprovedConflict && hasApprovedConflict.type !== "pending") {
+            showToast("Approval Denied", "Slot was recently confirmed for another event or timetable change.", "danger");
+            closeApprovalModal();
+            return;
+        }
+
+        booking.status = "approved";
+        booking.approverComments = DOM.approvalComment.value.trim() || "Approved. Make sure to present your QR code at check-in.";
+        
+        try { autoRejectConflictingBookings(booking); } catch(e) {}
+
+        saveBookings().then(() => {
+            showToast("Request Approved", `Confirmed booking ${booking.id} reservation successfully.`, "success");
+            addNotification("Booking Confirmed", `Your booking request ${booking.id} for ${getVenueName(booking.venueId)} has been APPROVED.`);
+
+            closeApprovalModal();
+            updatePendingBadgeCount();
+            
+            const activeNav = document.querySelector(".nav-item.active");
+            if (activeNav) {
+                renderView(activeNav.dataset.view);
+                if (activeNav.dataset.view === "calendar") renderCalendar();
+            } else {
+                renderView("approvals");
+            }
+        });
+    } catch(err) {
+        console.error(err);
+        showToast("System Error", "Failed to approve booking.", "danger");
+    }
+});
+
 DOM.btnRejectRequest.addEventListener("click", () => {
     if (!activeReviewBookingId) return;
-    const comment = DOM.approvalComment.value;
-    if (!comment.trim()) {
-        showToast("Comment Required", "Please provide a brief feedback comment explaining the rejection.", "warning");
+    const comment = DOM.approvalComment.value.trim();
+    if (!comment) {
+        DOM.approvalComment.style.borderColor = "var(--error)";
+        showToast("Comment Required", "Please provide a reason for rejecting this request.", "warning");
         return;
     }
+    DOM.approvalComment.style.borderColor = "var(--border)";
 
     const bIndex = state.bookings.findIndex(b => b.id === activeReviewBookingId);
     if (bIndex !== -1) {
         const booking = state.bookings[bIndex];
         booking.status = "rejected";
         booking.approverComments = comment;
-        saveBookings();
-        
-        showToast("Request Rejected", `Booking ${booking.id} has been rejected.`, "danger");
-        addNotification("Booking Rejected", `Your request ${booking.id} has been rejected. Reason: "${comment}"`);
 
-        closeApprovalModal();
-        updatePendingBadgeCount();
-        renderView("approvals");
+        saveBookings().then(() => {
+            showToast("Request Rejected", `Booking ${booking.id} has been declined.`, "danger");
+            addNotification("Booking Rejected", `Your request ${booking.id} has been rejected. Reason: "${comment}"`);
+
+            closeApprovalModal();
+            updatePendingBadgeCount();
+            
+            const activeNav = document.querySelector(".nav-item.active");
+            if (activeNav) {
+                renderView(activeNav.dataset.view);
+                if (activeNav.dataset.view === "calendar") renderCalendar();
+            } else {
+                renderView("approvals");
+            }
+        });
     }
 });
 
-// Request modification click
+
 DOM.btnModifyRequest.addEventListener("click", () => {
     if (!activeReviewBookingId) return;
     const comment = DOM.approvalComment.value;
@@ -2255,12 +2298,676 @@ DOM.clearNotiBtn.addEventListener("click", () => {
     renderNotificationsUI();
 });
 
+// --- DATASET SYNCHRONIZATION LOGIC ---
+let syncState = {
+    parsedData: [],
+    headers: [],
+    columnMapping: {},
+    uploadedFileName: null,
+    inputMethod: "paste" // "paste" or "file"
+};
+
+function initSyncEvents() {
+    const btnPaste = document.getElementById("btn-input-paste");
+    const btnFile = document.getElementById("btn-input-file");
+    const pasteContainer = document.getElementById("paste-input-container");
+    const fileContainer = document.getElementById("file-input-container");
+    
+    if (btnPaste && btnFile) {
+        btnPaste.addEventListener("click", () => {
+            syncState.inputMethod = "paste";
+            btnPaste.className = "btn btn-sm btn-primary";
+            btnFile.className = "btn btn-sm btn-outline";
+            pasteContainer.style.display = "block";
+            fileContainer.style.display = "none";
+        });
+        
+        btnFile.addEventListener("click", () => {
+            syncState.inputMethod = "file";
+            btnFile.className = "btn btn-sm btn-primary";
+            btnPaste.className = "btn btn-sm btn-outline";
+            fileContainer.style.display = "block";
+            pasteContainer.style.display = "none";
+        });
+    }
+
+    const dropZone = document.getElementById("sync-drop-zone");
+    const fileInput = document.getElementById("sync-file-input");
+    const fileNameDiv = document.getElementById("sync-file-name");
+
+    if (dropZone && fileInput) {
+        dropZone.addEventListener("click", () => fileInput.click());
+        
+        dropZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            dropZone.classList.add("dragover");
+        });
+        
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.classList.remove("dragover");
+        });
+        
+        dropZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length > 0) {
+                handleSyncFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener("change", () => {
+            if (fileInput.files.length > 0) {
+                handleSyncFile(fileInput.files[0]);
+            }
+        });
+    }
+
+    function handleSyncFile(file) {
+        syncState.uploadedFileName = file.name;
+        if (fileNameDiv) {
+            fileNameDiv.textContent = `Selected File: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            fileNameDiv.style.display = "block";
+        }
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const rawTextarea = document.getElementById("sync-raw-text");
+            if (rawTextarea) rawTextarea.value = e.target.result;
+            
+            // Auto detect format from extension
+            const ext = file.name.split('.').pop().toLowerCase();
+            const formatSelect = document.getElementById("sync-format-select");
+            if (formatSelect) {
+                if (ext === "json") formatSelect.value = "json";
+                else if (ext === "tsv") formatSelect.value = "tsv";
+                else if (ext === "csv") formatSelect.value = "csv";
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    const btnParse = document.getElementById("btn-parse-data");
+    if (btnParse) {
+        btnParse.addEventListener("click", processParsedData);
+    }
+}
+
+function parseCSVLine(line, delimiter) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+        let char = line[i];
+        if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+    result.push(current.trim());
+    return result;
+}
+
+function renderSyncView() {
+    // If not admin, do nothing
+    if (state.currentRole !== "admin") return;
+    
+    // Clear/Reset mapping output if empty
+    if (syncState.parsedData.length === 0) {
+        const previewBody = document.getElementById("sync-preview-body");
+        if (previewBody) {
+            previewBody.innerHTML = `
+                <div class="sync-empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                    <p>Please enter or upload data and click "Parse & Review Data" to map and preview.</p>
+                </div>
+            `;
+        }
+    }
+}
+
+function processParsedData() {
+    const rawTextarea = document.getElementById("sync-raw-text");
+    const rawText = rawTextarea ? rawTextarea.value.trim() : "";
+    if (!rawText) {
+        showToast("Sync Error", "Please paste data or upload a file first.", "danger");
+        return;
+    }
+
+    let format = document.getElementById("sync-format-select").value;
+    const hasHeaders = document.getElementById("sync-has-headers").checked;
+
+    if (format === "auto") {
+        if (rawText.startsWith("[") || rawText.startsWith("{")) {
+            format = "json";
+        } else if (rawText.includes("\t")) {
+            format = "tsv";
+        } else {
+            format = "csv";
+        }
+    }
+
+    let rows = [];
+    let headers = [];
+
+    try {
+        if (format === "json") {
+            const parsed = JSON.parse(rawText);
+            const dataArray = Array.isArray(parsed) ? parsed : [parsed];
+            if (dataArray.length === 0) throw new Error("Empty JSON array");
+            
+            // Extract headers from keys of the first item
+            headers = Object.keys(dataArray[0]);
+            
+            // Convert to matching matrix rows
+            rows = dataArray.map(item => headers.map(h => item[h] !== undefined ? String(item[h]) : ''));
+        } else {
+            const delimiter = format === "tsv" ? "\t" : ",";
+            const lines = rawText.split(/\r?\n/).filter(line => line.trim().length > 0);
+            if (lines.length === 0) throw new Error("No text data rows found");
+
+            if (hasHeaders) {
+                headers = parseCSVLine(lines[0], delimiter);
+                rows = lines.slice(1).map(line => parseCSVLine(line, delimiter));
+            } else {
+                const sampleCols = parseCSVLine(lines[0], delimiter).length;
+                headers = Array.from({ length: sampleCols }, (_, i) => `Column ${i + 1}`);
+                rows = lines.map(line => parseCSVLine(line, delimiter));
+            }
+        }
+
+        syncState.parsedData = rows;
+        syncState.headers = headers;
+        
+        renderMappingAndPreview();
+        showToast("Data Parsed", `Found ${rows.length} rows and ${headers.length} columns.`, "success");
+    } catch (err) {
+        showToast("Parse Failure", `Failed to parse data: ${err.message}`, "danger");
+        console.error(err);
+    }
+}
+
+function renderMappingAndPreview() {
+    const previewBody = document.getElementById("sync-preview-body");
+    if (!previewBody) return;
+
+    // Define target schema fields
+    const schemaFields = [
+        { key: "venueName", label: "Venue Name / ID *", desc: "Venue name (e.g. Seminar Hall 1)", required: true },
+        { key: "teacherName", label: "Teacher / Requester *", desc: "Teacher name (e.g. Dr. Rajesh Sharma)", required: true },
+        { key: "date", label: "Date *", desc: "YYYY-MM-DD", required: true },
+        { key: "startTime", label: "Start Time *", desc: "HH:MM", required: true },
+        { key: "endTime", label: "End Time *", desc: "HH:MM", required: true },
+        { key: "purpose", label: "Purpose / Class", desc: "Purpose (e.g. CS-101 Lecture)", required: false },
+        { key: "capacity", label: "Venue Capacity", desc: "Optional capacity (e.g. 100)", required: false }
+    ];
+
+    // Try to auto-guess mapping by header names
+    const guessMapping = {};
+    schemaFields.forEach(field => {
+        guessMapping[field.key] = -1; // default: not mapped
+        const searchTerms = {
+            venueName: ["venue", "room", "class", "hall", "location", "space"],
+            teacherName: ["teacher", "prof", "fac", "requester", "name", "instructor"],
+            date: ["date", "day", "when"],
+            startTime: ["start", "from", "time"],
+            endTime: ["end", "to"],
+            purpose: ["purpose", "event", "class", "subject", "course", "title", "activity"],
+            capacity: ["cap", "seats", "size"]
+        }[field.key];
+
+        for (let i = 0; i < syncState.headers.length; i++) {
+            const h = syncState.headers[i].toLowerCase();
+            if (searchTerms.some(term => h.includes(term))) {
+                guessMapping[field.key] = i;
+                break;
+            }
+        }
+    });
+
+    // Generate mapping selectors HTML
+    let mappingHTML = `
+        <div class="mapping-grid">
+    `;
+
+    schemaFields.forEach(field => {
+        mappingHTML += `
+            <div class="mapping-item">
+                <label for="map-${field.key}">${field.label}</label>
+                <select id="map-${field.key}" class="form-input sync-map-select" style="padding: 0.35rem 0.5rem; font-size: 0.78rem;">
+                    <option value="-1">-- Not Mapped --</option>
+                    ${syncState.headers.map((h, idx) => `
+                        <option value="${idx}" ${guessMapping[field.key] === idx ? 'selected' : ''}>${h}</option>
+                    `).join('')}
+                </select>
+            </div>
+        `;
+    });
+
+    mappingHTML += `</div>`;
+
+    // Preview area container
+    previewBody.innerHTML = `
+        <div class="mapping-section" style="text-align: left;">
+            <h4 style="margin-bottom: 0.5rem; font-size: 0.95rem;">Map Dataset Columns</h4>
+            <p class="text-secondary" style="font-size: 0.78rem; margin-bottom: 0.75rem;">Link columns from your pasted table/file to the JUIT database fields.</p>
+            ${mappingHTML}
+        </div>
+
+        <div id="sync-preview-table-container">
+            <!-- Dynamic Preview Table will be injected here -->
+        </div>
+    `;
+
+    // Bind event listeners on mapping change to update preview in real-time
+    const mapSelects = previewBody.querySelectorAll(".sync-map-select");
+    mapSelects.forEach(select => {
+        select.addEventListener("change", updateSyncPreviewTable);
+    });
+
+    // Run initial preview rendering
+    updateSyncPreviewTable();
+}
+
+function updateSyncPreviewTable() {
+    const container = document.getElementById("sync-preview-table-container");
+    if (!container) return;
+
+    // Get current mapping selections
+    const mapping = {
+        venueName: parseInt(document.getElementById("map-venueName").value),
+        teacherName: parseInt(document.getElementById("map-teacherName").value),
+        date: parseInt(document.getElementById("map-date").value),
+        startTime: parseInt(document.getElementById("map-startTime").value),
+        endTime: parseInt(document.getElementById("map-endTime").value),
+        purpose: parseInt(document.getElementById("map-purpose").value),
+        capacity: parseInt(document.getElementById("map-capacity").value)
+    };
+
+    // Check if required fields are mapped
+    const missingRequired = [];
+    if (mapping.venueName === -1) missingRequired.push("Venue Name / ID");
+    if (mapping.teacherName === -1) missingRequired.push("Teacher / Requester");
+    if (mapping.date === -1) missingRequired.push("Date");
+    if (mapping.startTime === -1) missingRequired.push("Start Time");
+    if (mapping.endTime === -1) missingRequired.push("End Time");
+
+    if (missingRequired.length > 0) {
+        container.innerHTML = `
+            <div class="sync-empty-state" style="height: 200px;">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <p style="font-size: 0.85rem;">Please map all required columns: <strong>${missingRequired.join(', ')}</strong></p>
+            </div>
+        `;
+        return;
+    }
+
+    // Process rows and build metrics
+    let newVenuesCount = 0;
+    let validBookingsCount = 0;
+    let conflictsCount = 0;
+    let warningsCount = 0;
+
+    const validatedRows = [];
+    // Keep track of timeslots assigned during *this* parse batch to flag internal double-bookings
+    const internalScheduleTracker = {};
+
+    syncState.parsedData.forEach((row, rowIdx) => {
+        const venueNameVal = row[mapping.venueName];
+        const teacherNameVal = row[mapping.teacherName];
+        const dateVal = row[mapping.date] ? row[mapping.date].trim() : "";
+        const startTimeVal = row[mapping.startTime] ? row[mapping.startTime].trim() : "";
+        const endTimeVal = row[mapping.endTime] ? row[mapping.endTime].trim() : "";
+        const purposeVal = mapping.purpose !== -1 ? row[mapping.purpose] : "Class Lecture";
+        const capacityVal = mapping.capacity !== -1 && row[mapping.capacity] ? parseInt(row[mapping.capacity]) : 60;
+
+        const rowResult = {
+            index: rowIdx + 1,
+            venueName: venueNameVal,
+            teacherName: teacherNameVal,
+            date: dateVal,
+            time: `${startTimeVal} - ${endTimeVal}`,
+            purpose: purposeVal,
+            statusBadge: "",
+            statusClass: "",
+            warningText: "",
+            isValid: true,
+            venueId: "",
+            capacity: capacityVal
+        };
+
+        // Validate basic cells
+        if (!venueNameVal || !teacherNameVal || !dateVal || !startTimeVal || !endTimeVal) {
+            rowResult.isValid = false;
+            rowResult.statusBadge = "Invalid Data";
+            rowResult.statusClass = "rejected";
+            rowResult.warningText = "Missing required cell value.";
+            warningsCount++;
+            validatedRows.push(rowResult);
+            return;
+        }
+
+        // Venue ID computation
+        const venueIdVal = venueNameVal.toLowerCase().replace(/[^a-z0-9]+/g, '-').trim();
+        rowResult.venueId = venueIdVal;
+
+        // Check if venue exists
+        const venueExists = state.venues.some(v => v.id === venueIdVal || v.name.toLowerCase() === venueNameVal.toLowerCase());
+        let venueStatusLabel = "";
+        if (!venueExists) {
+            newVenuesCount++;
+            venueStatusLabel = " [New Venue]";
+        }
+
+        // Date validation: YYYY-MM-DD
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(dateVal)) {
+            rowResult.isValid = false;
+            rowResult.statusBadge = "Invalid Date";
+            rowResult.statusClass = "rejected";
+            rowResult.warningText = "Date must be in YYYY-MM-DD format (e.g. 2026-08-01).";
+            warningsCount++;
+            validatedRows.push(rowResult);
+            return;
+        }
+
+        // Time format check (HH:MM)
+        const timeRegex = /^\d{2}:\d{2}$/;
+        if (!timeRegex.test(startTimeVal) || !timeRegex.test(endTimeVal)) {
+            rowResult.isValid = false;
+            rowResult.statusBadge = "Invalid Time";
+            rowResult.statusClass = "rejected";
+            rowResult.warningText = "Time must be in HH:MM format (e.g. 09:00).";
+            warningsCount++;
+            validatedRows.push(rowResult);
+            return;
+        }
+
+        const startH = parseInt(startTimeVal.split(":")[0]);
+        const endH = parseInt(endTimeVal.split(":")[0]);
+        if (startH >= endH) {
+            rowResult.isValid = false;
+            rowResult.statusBadge = "Time Conflict";
+            rowResult.statusClass = "rejected";
+            rowResult.warningText = "Start time must be before end time.";
+            warningsCount++;
+            validatedRows.push(rowResult);
+            return;
+        }
+
+        // Check conflicts against standard database
+        const conflict = checkBookingConflicts(venueIdVal, dateVal, startTimeVal, endTimeVal);
+        
+        // Check conflicts inside current batch list (prevent double booking of teachers/venues in same sheet)
+        let internalConflict = false;
+        const startHour = parseInt(startTimeVal.split(":")[0]);
+        const endHour = parseInt(endTimeVal.split(":")[0]);
+        for (let h = startHour; h < endHour; h++) {
+            const key = `${venueIdVal}|${dateVal}|${h}`;
+            if (internalScheduleTracker[key]) {
+                internalConflict = true;
+                break;
+            }
+        }
+
+        if (conflict) {
+            rowResult.isValid = false;
+            rowResult.statusClass = "rejected";
+            conflictsCount++;
+            if (conflict.type === "timetable") {
+                rowResult.statusBadge = "Class Conflict";
+                rowResult.warningText = `Overlaps with blocked slot: "${conflict.className}"`;
+            } else {
+                rowResult.statusBadge = "Booking Overlap";
+                rowResult.warningText = `Overlaps with approved booking by ${conflict.booking.requesterName} ("${conflict.booking.purpose}")`;
+            }
+        } else if (internalConflict) {
+            rowResult.isValid = false;
+            rowResult.statusClass = "rejected";
+            rowResult.statusBadge = "Sheet Duplicate";
+            rowResult.warningText = `Time conflict detected with another row in this spreadsheet upload.`;
+            conflictsCount++;
+        } else {
+            // Success! Save slot in batch tracker to prevent duplicates later in sheet loop
+            for (let h = startHour; h < endHour; h++) {
+                const key = `${venueIdVal}|${dateVal}|${h}`;
+                internalScheduleTracker[key] = true;
+            }
+            
+            rowResult.statusClass = "success";
+            rowResult.statusBadge = venueExists ? "Ready" : "Ready [New Venue]";
+            validBookingsCount++;
+        }
+
+        validatedRows.push(rowResult);
+    });
+
+    // Render Preview Table & Action Controls
+    const importMode = document.getElementById("sync-mode-select").value;
+
+    let previewTableHTML = `
+        <div class="preview-summary-bar" style="margin-top: 1rem; text-align: left;">
+            <div class="preview-summary-stats">
+                <div class="preview-stat-item">
+                    <span class="preview-stat-dot total"></span>
+                    <span>Total Rows: <strong>${validatedRows.length}</strong></span>
+                </div>
+                <div class="preview-stat-item">
+                    <span class="preview-stat-dot new-venue"></span>
+                    <span>New Venues: <strong>${newVenuesCount}</strong></span>
+                </div>
+                <div class="preview-stat-item">
+                    <span class="preview-stat-dot booking"></span>
+                    <span>Valid Imports: <strong>${validBookingsCount}</strong></span>
+                </div>
+                ${conflictsCount > 0 ? `
+                <div class="preview-stat-item">
+                    <span class="preview-stat-dot conflict"></span>
+                    <span class="text-danger">Conflicts: <strong>${conflictsCount}</strong></span>
+                </div>` : ''}
+                ${warningsCount > 0 ? `
+                <div class="preview-stat-item">
+                    <span class="preview-stat-dot warning"></span>
+                    <span class="text-warning">Errors: <strong>${warningsCount}</strong></span>
+                </div>` : ''}
+            </div>
+            <div>
+                <span class="status-badge ${importMode === 'overwrite' ? 'rejected' : 'pending'}" style="font-size:0.75rem; text-transform:uppercase;">${importMode} Mode</span>
+            </div>
+        </div>
+
+        <div class="sync-table-container">
+            <table class="data-table" style="font-size: 0.8rem;">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">Row</th>
+                        <th>Status</th>
+                        <th>Venue</th>
+                        <th>Teacher / Requester</th>
+                        <th>Date & Time</th>
+                        <th>Purpose / Remarks</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${validatedRows.slice(0, 30).map(r => `
+                        <tr>
+                            <td>${r.index}</td>
+                            <td><span class="status-badge ${r.statusClass}" style="font-size:0.7rem; padding:0.15rem 0.35rem;">${r.statusBadge}</span></td>
+                            <td><strong>${r.venueName}</strong></td>
+                            <td>${r.teacherName}</td>
+                            <td>${r.date} <br><span class="text-muted" style="font-size:0.72rem;">${r.time}</span></td>
+                            <td class="${r.isValid ? '' : 'text-danger'}">${r.isValid ? r.purpose : `⚠️ ${r.warningText}`}</td>
+                        </tr>
+                    `).join('')}
+                    ${validatedRows.length > 30 ? `
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: var(--text-muted); font-style: italic; padding: 0.75rem;">
+                                ... showing first 30 of ${validatedRows.length} rows ...
+                            </td>
+                        </tr>
+                    ` : ''}
+                </tbody>
+            </table>
+        </div>
+
+        <div style="margin-top: 1.25rem; display: flex; gap: 0.75rem; justify-content: flex-end;">
+            <button class="btn btn-secondary" id="btn-cancel-sync">Clear Data</button>
+            <button class="btn btn-success" id="btn-execute-sync" ${validBookingsCount === 0 ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>
+                Confirm & Sync ${validBookingsCount} Bookings
+            </button>
+        </div>
+    `;
+
+    container.innerHTML = previewTableHTML;
+
+    // Bind action buttons
+    document.getElementById("btn-cancel-sync").addEventListener("click", () => {
+        syncState.parsedData = [];
+        syncState.headers = [];
+        syncState.columnMapping = {};
+        syncState.uploadedFileName = null;
+        const textElement = document.getElementById("sync-raw-text");
+        if (textElement) textElement.value = "";
+        const fileInput = document.getElementById("sync-file-input");
+        if (fileInput) fileInput.value = "";
+        const fileNameDiv = document.getElementById("sync-file-name");
+        if (fileNameDiv) fileNameDiv.style.display = "none";
+        renderSyncView();
+    });
+
+    document.getElementById("btn-execute-sync").addEventListener("click", () => {
+        executeSync(validatedRows.filter(r => r.isValid));
+    });
+}
+
+async function executeSync(validRows) {
+    const importMode = document.getElementById("sync-mode-select").value;
+    
+    showToast("Starting Synchronization...", `Creating venues and importing booking records...`, "pending");
+    
+    try {
+        // 1. Create missing venues
+        const newVenues = [];
+        for (let row of validRows) {
+            const venueExists = state.venues.some(v => v.id === row.venueId);
+            const alreadyStaged = newVenues.some(v => v.id === row.venueId);
+            if (!venueExists && !alreadyStaged) {
+                const newVenue = {
+                    id: row.venueId,
+                    name: row.venueName,
+                    capacity: row.capacity || 60,
+                    type: (row.capacity || 60) <= 30 ? "Small" : ((row.capacity || 60) > 150 ? "Large" : "Medium"),
+                    facilities: ["ac", "projector"],
+                    facilitiesLabels: ["Auto Sync Created", "Air Conditioning", "Projector Screen"],
+                    description: `Automatically created via dataset synchronization on ${new Date().toLocaleDateString()}`,
+                    approver: "estate",
+                    icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><path d="M9 17v-2a3 3 0 0 1 6 0v2"/></svg>`
+                };
+                newVenues.push(newVenue);
+            }
+        }
+
+        // Push new venues to server one by one
+        let venuesCreated = 0;
+        for (let v of newVenues) {
+            const res = await fetch('/api/venues', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(v)
+            });
+            if (res.ok) {
+                venuesCreated++;
+            } else {
+                console.error("Failed to save venue:", v.name);
+            }
+        }
+
+        // Re-fetch venues so we have them loaded
+        await fetchVenues();
+
+        // 2. Prepare bookings to upload
+        const newBookings = validRows.map(row => {
+            const times = row.time.split(" - ");
+            return {
+                id: "B-" + Math.floor(Math.random() * 900000 + 100000),
+                venueId: row.venueId,
+                date: row.date,
+                startTime: times[0],
+                endTime: times[1],
+                requesterName: row.teacherName,
+                requesterRole: "Faculty Member",
+                purpose: row.purpose,
+                expectedAttendees: row.capacity || 60,
+                status: "approved",
+                approverComments: "Imported via Dataset Sync",
+                isRecurring: false,
+                recurrenceParent: null,
+                checkedIn: false
+            };
+        });
+
+        // Save Bookings
+        let syncSuccess = false;
+        if (importMode === "overwrite") {
+            // Replace all: PUT request to /api/bookings
+            const res = await fetch('/api/bookings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newBookings)
+            });
+            syncSuccess = res.ok;
+        } else {
+            // Append: POST list of bookings
+            const res = await fetch('/api/bookings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newBookings)
+            });
+            syncSuccess = res.ok;
+        }
+
+        if (syncSuccess) {
+            showToast("Sync Successful!", `Synchronized: ${venuesCreated} new venues and ${newBookings.length} bookings.`, "success");
+            
+            // Clear sync state
+            syncState.parsedData = [];
+            syncState.headers = [];
+            syncState.columnMapping = {};
+            syncState.uploadedFileName = null;
+            const textElement = document.getElementById("sync-raw-text");
+            if (textElement) textElement.value = "";
+            const fileInput = document.getElementById("sync-file-input");
+            if (fileInput) fileInput.value = "";
+            const fileNameDiv = document.getElementById("sync-file-name");
+            if (fileNameDiv) fileNameDiv.style.display = "none";
+            
+            // Reload and navigate to calendar
+            await fetchVenues();
+            await fetchBookings();
+            
+            const calendarNav = document.querySelector(`.nav-item[data-view="calendar"]`);
+            if (calendarNav) {
+                calendarNav.click();
+            }
+        } else {
+            throw new Error("Server rejected booking database updates.");
+        }
+    } catch (err) {
+        showToast("Sync Failed", `Failed to complete synchronization: ${err.message}`, "danger");
+        console.error(err);
+    }
+}
+
 // Core Startup Initialization
 async function init() {
     await initializeState();
     updateClockUI();
     renderNotificationsUI();
     updateRoleViews();
+    initSyncEvents();
     
     // Default load catalogue
     renderView("catalogue");
