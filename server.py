@@ -16,7 +16,7 @@ except ImportError:
     resend = None
 
 ADMIN_EMAIL = "aryan777rana@gmail.com"
-SENDER_EMAIL = "admin@manik2375.tech"
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "admin@deepakraotech.me")
 
 def send_email_async(to_email, subject, html_content):
     if not resend or not resend.api_key:

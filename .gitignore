@@ -7,6 +7,7 @@ __pycache__/
 *$py.class
 
 .env
+.env.*
 
 # System Files
 .DS_Store
